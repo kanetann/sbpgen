@@ -34,6 +34,12 @@ Action abbreviations
 - B is Back
 - P is Process
 
+Separater
+
+- : is Step Separater
+- / is Line
+- // is Two-way Lines
+- | is No Line
 
 ## Usage
 

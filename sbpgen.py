@@ -62,7 +62,8 @@ def _parse_legacy(line: str):
             flow_seq += [""] * (len(act_seq) - len(flow_seq))
         else:
             act_seq += [""] * (len(flow_seq) - len(act_seq))
-    return step, flow_seq, act_seq
+    edges = [(i, i + 1) for i in range(len(flow_seq) - 1)]
+    return step, flow_seq, act_seq, edges
 
 
 def _parse_inline_labeled(line: str):
@@ -85,19 +86,59 @@ def _parse_inline_labeled(line: str):
         step, labeled = parts
     # Use '/' or '>' or '→' as separators
     labeled = labeled.replace("→", "/").replace(">", "/")
-    segments = [seg.strip() for seg in labeled.split("/") if seg.strip()]
-    flow_seq, act_seq = [], []
-    for seg in segments:
-        if not seg:
+
+    segments = []
+    separators = []
+    buf = []
+    i = 0
+    while i < len(labeled):
+        ch = labeled[i]
+        if ch == "/" or ch == "|":
+            next_is_slash = i + 1 < len(labeled) and labeled[i + 1] == "/"
+            segment = "".join(buf).strip()
+            if not segment:
+                raise ValueError("Missing role/action between separators in inline-labeled input")
+            segments.append(segment)
+            if ch == "|":
+                separators.append("|")
+                buf = []
+                i += 1
+                continue
+            separators.append("//" if next_is_slash else "/")
+            buf = []
+            i += 2 if next_is_slash else 1
             continue
+        buf.append(ch)
+        i += 1
+    tail = "".join(buf).strip()
+    if not tail:
+        raise ValueError("Inline-labeled input must end with a role/action segment")
+    segments.append(tail)
+
+    parsed_segments = []
+    for seg in segments:
         # Expect leading C/F/B/P (case-insensitive) then the action label
         role = seg[0].upper()
         if role not in {"C", "F", "B", "P"}:
             raise ValueError(f"Invalid role prefix in segment: '{seg}' (expected C/F/B/P)")
         action = seg[1:].strip()
-        flow_seq.append(role)
-        act_seq.append(action)
-    return step, flow_seq, act_seq
+        parsed_segments.append((role, action))
+
+    flow_seq = [role for role, _ in parsed_segments]
+    act_seq = [action for _, action in parsed_segments]
+
+    edges = []
+    for idx in range(len(parsed_segments) - 1):
+        sep = separators[idx]
+        if sep != "|":
+            edges.append((idx, idx + 1))
+        if sep == "//":
+            branch_target = idx + 2
+            if branch_target >= len(parsed_segments):
+                raise ValueError("Double slash '//' must be followed by another role/action segment")
+            edges.append((idx, branch_target))
+
+    return step, flow_seq, act_seq, edges
 
 
 def parse_line(line: str):
@@ -113,7 +154,7 @@ def parse_line(line: str):
     return _parse_inline_labeled(line)
 
 
-def draw_page(pdf, step, flow_seq, act_seq, font_prop=None):
+def draw_page(pdf, step, flow_seq, act_seq, edges, font_prop=None):
     lanes = [("Customer", "C"), ("Front", "F"), ("Back", "B"), ("Process", "P")]
     lane_base_y = {"C": 3.0, "F": 2.2, "B": 1.4, "P": 0.6}
 
@@ -232,10 +273,11 @@ def draw_page(pdf, step, flow_seq, act_seq, font_prop=None):
         )
 
     # Points and arrows
-    prev = None
-    for x, role, act in zip(xs, flow_seq, act_seq):
+    node_positions = {}
+    for idx, (x, role, act) in enumerate(zip(xs, flow_seq, act_seq)):
         y = lane_y.get(role, 0.0)
         node_x = x
+        node_positions[idx] = (node_x, y)
         ax.plot([node_x], [y], marker="o")
         wrapped = textwrap.fill(act, width=14)
         ax.text(
@@ -247,10 +289,27 @@ def draw_page(pdf, step, flow_seq, act_seq, font_prop=None):
             va="bottom",
             fontproperties=font_prop,
         )
-        if prev is not None:
-            (px, py) = prev
-            ax.annotate("", xy=(node_x, y), xytext=(px, py), arrowprops=dict(arrowstyle="->"))
-        prev = (node_x, y)
+
+    def _connection_style(start_idx: int, end_idx: int, sy: float, ey: float) -> str:
+        if end_idx - start_idx <= 1 and abs(sy - ey) > 1e-6:
+            return "arc3,rad=0.0"
+        if end_idx - start_idx <= 1 and abs(sy - ey) <= 1e-6:
+            return "arc3,rad=0.2"
+        rad = 0.25 if sy <= ey else -0.25
+        return f"arc3,rad={rad}"
+
+    for start, end in edges:
+        if start >= len(flow_seq) or end >= len(flow_seq):
+            continue
+        sx, sy = node_positions[start]
+        ex, ey = node_positions[end]
+        connection_style = _connection_style(start, end, sy, ey)
+        ax.annotate(
+            "",
+            xy=(ex, ey),
+            xytext=(sx, sy),
+            arrowprops=dict(arrowstyle="->", connectionstyle=connection_style),
+        )
 
     pdf.savefig(fig)
     plt.close(fig)
@@ -310,8 +369,8 @@ def main():
 
     with PdfPages(outfile) as pdf:
         for line in lines:
-            step, flow_seq, act_seq = parse_line(line)
-            draw_page(pdf, step, flow_seq, act_seq)
+            step, flow_seq, act_seq, edges = parse_line(line)
+            draw_page(pdf, step, flow_seq, act_seq, edges)
 
     print(f"Saved: {outfile}")
 

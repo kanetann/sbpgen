@@ -16,7 +16,7 @@ Service Blueprint Generator with simple swimlanes for Text-based Workflows.
 example.txt
 
 ```
-Add to Cart:C Click Cart/F Add to Cart/B Update Inventory/P Check DB/B Reflect Remaining/P Log Record
+Add to Cart:C Click Cart/F Add to Cart/B Update Inventory//P Check DB|B Reflect Remaining/P Log Record
 Example Step 1:C Action1/F Action2/B Action3/P Action4/B Action5/F Action6/C Action7
 Example Step 2:C Action1/F Action2/P Action3/P Action4/C Action5/F Action6/C Action7
 ```
